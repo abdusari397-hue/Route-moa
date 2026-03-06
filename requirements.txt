@@ -1,0 +1,8 @@
+httpx
+python-dotenv
+torch
+transformers
+scikit-learn
+datasets
+streamlit
+colorama
