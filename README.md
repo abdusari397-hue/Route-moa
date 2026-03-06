@@ -16,6 +16,28 @@ RouteMoA is an advanced, cost-effective, and low-latency **Mixture of Agents (Mo
 
 ## 🏗️ Architecture Pipeline
 
+```mermaid
+graph TD
+    User([User Prompt]) --> SLM[SLM Scorer: mDeBERTaV3]
+    SLM -- "Predicts Success Scores" --> Ranker[Top-K Ranker]
+    Ranker -- "Routes to Top Models" --> ParallelGen[Parallel Generation Layer]
+    
+    subgraph "Fast-Fail Async Execution"
+        ParallelGen --> M1[Model 1: Gemini Flash]
+        ParallelGen --> M2[Model 2: Qwen 35B]
+        ParallelGen --> M3[Model 3: Llama 3]
+    end
+    
+    M1 -- "Confidence > Threshold (Stop Others)" --> Check{Early Stop Trigger?}
+    M2 --> Check
+    M3 --> Check
+    
+    Check -- "Yes (Fast Return)" --> FinalOutput([Final Return])
+    Check -- "No (Low Confidence)" --> Cross[Cross-Assessment Judge]
+    Cross -- "Ranks Answers" --> Fusion[Aggregator Fusion]
+    Fusion --> FinalOutput
+```
+
 When a user submits a query:
 1.  **SLM Scoring:** The prompt is analyzed locally. The SLM estimates confidence scores for all connected LLMs.
 2.  **Top-K Selection:** Only the models most likely to succeed (top $K$) are queried.
