@@ -37,8 +37,9 @@ class OpenRouterModel:
 
     async def generate(
         self,
-        prompt: str,
+        prompt: Optional[str] = None,
         system_prompt: Optional[str] = None,
+        messages: Optional[list[dict]] = None,
         temperature: float = 0.7,
         max_tokens: int = 2048,
         retries: int = 3,
@@ -46,22 +47,20 @@ class OpenRouterModel:
     ) -> dict:
         """
         Call the model via OpenRouter and return structured results.
-
-        Returns:
-            {
-                "model_id": str,
-                "answer": str,          # Raw text response
-                "tokens_in": int,
-                "tokens_out": int,
-                "latency_ms": float,
-                "cost": float,
-                "error": str | None,
-            }
+        Accepts either a single 'prompt' or a full 'messages' history.
         """
-        messages = []
-        if system_prompt:
-            messages.append({"role": "system", "content": system_prompt})
-        messages.append({"role": "user", "content": prompt})
+        final_messages = []
+        if messages is not None:
+            final_messages = messages.copy()
+            if system_prompt and not any(m.get("role") == "system" for m in final_messages):
+                final_messages.insert(0, {"role": "system", "content": system_prompt})
+            if prompt:
+                final_messages.append({"role": "user", "content": prompt})
+        else:
+            if system_prompt:
+                final_messages.append({"role": "system", "content": system_prompt})
+            if prompt:
+                final_messages.append({"role": "user", "content": prompt})
 
         # Dynamically fetch API key to support runtime UI input
         current_api_key = os.getenv("OPENROUTER_API_KEY", OPENROUTER_API_KEY)
@@ -75,7 +74,7 @@ class OpenRouterModel:
 
         payload = {
             "model": self.model_id,
-            "messages": messages,
+            "messages": final_messages,
             "temperature": temperature,
             "max_tokens": max_tokens,
         }

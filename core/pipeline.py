@@ -95,12 +95,13 @@ class RouteMoAPipeline:
         else:
             print(message)
 
-    async def run(self, query: str) -> dict:
+    async def run(self, query: str, messages: Optional[list[dict]] = None) -> dict:
         """
         Execute the full RouteMoA pipeline.
 
         Args:
             query: User's question/prompt
+            messages: Optional chat history
 
         Returns:
             Structured result with final_answer, layer_trace, and stats
@@ -144,7 +145,7 @@ class RouteMoAPipeline:
         self._log(f"  Selected models: {[get_model_by_id(mid)['name'] for mid in selected_ids]}")
 
         # Generate in parallel
-        layer1_results = await self._run_layer1(query, selected_ids)
+        layer1_results = await self._run_layer1(query, selected_ids, messages)
 
         # Track stats
         layer1_trace = {
@@ -180,7 +181,7 @@ class RouteMoAPipeline:
                 self._log(f"\n{Fore.MAGENTA}🔄 Layer {layer_num}: Cross-Assessment + Refinement{Style.RESET_ALL}")
 
                 # Cross-assessment: top model judges others
-                cross_scores = await self._run_cross_assessment(query, prev_results)
+                cross_scores = await self._run_cross_assessment(query, prev_results, messages)
 
                 # Update scores with assessment
                 self_scores_dict = {r["model_id"]: r["self_score"] for r in prev_results}
@@ -204,7 +205,8 @@ class RouteMoAPipeline:
                     prev_results, 
                     layer_num, 
                     scorer_scores, 
-                    cross_scores
+                    cross_scores,
+                    messages
                 )
 
                 # Track stats
@@ -249,7 +251,7 @@ class RouteMoAPipeline:
         self._log(f"  Aggregator: {best_model_name}")
 
         final_answer, final_cost, final_tokens = await self._run_final_aggregation(
-            query, all_answers, best_model_id
+            query, all_answers, best_model_id, messages
         )
         total_cost += final_cost
         total_tokens_in += final_tokens[0]
@@ -285,13 +287,13 @@ class RouteMoAPipeline:
     # Internal Layer Methods
     # ─────────────────────────────────────
 
-    async def _run_layer1(self, query: str, model_ids: list[str]) -> list[dict]:
+    async def _run_layer1(self, query: str, model_ids: list[str], messages: Optional[list[dict]] = None) -> list[dict]:
         """Run Layer 1: parallel generation with self-assessment."""
         prompt = build_layer1_prompt(query)
         tasks = []
         for mid in model_ids:
             model = get_model_instance(mid)
-            t = asyncio.create_task(self._generate_and_parse_layer1(model, prompt))
+            t = asyncio.create_task(self._generate_and_parse_layer1(model, prompt, messages))
             tasks.append(t)
 
         results = []
@@ -312,11 +314,11 @@ class RouteMoAPipeline:
         return results
 
     async def _generate_and_parse_layer1(
-        self, model: OpenRouterModel, prompt: str
+        self, model: OpenRouterModel, prompt: str, messages: Optional[list[dict]] = None
     ) -> dict:
         """Generate and parse a single Layer 1 response."""
         # Fast fail: 40s timeout for initial generation
-        raw = await model.generate(prompt, system_prompt=LAYER1_SYSTEM_PROMPT, timeout=40.0)
+        raw = await model.generate(prompt, system_prompt=LAYER1_SYSTEM_PROMPT, messages=messages, timeout=40.0)
 
         if raw["error"]:
             self._log(f"  ❌ {model.name}: {raw['error']}")
@@ -349,7 +351,7 @@ class RouteMoAPipeline:
         }
 
     async def _run_cross_assessment(
-        self, query: str, prev_results: list[dict]
+        self, query: str, prev_results: list[dict], messages: Optional[list[dict]] = None
     ) -> dict[str, float]:
         """
         Run cross-assessment: the top model judges all others.
@@ -368,7 +370,7 @@ class RouteMoAPipeline:
 
         prompt = build_cross_assessment_prompt(query, answers_to_judge)
         # Judging is fast, max_tokens=512, strict timeout
-        raw = await judge_model.generate(prompt, max_tokens=512, timeout=20.0)
+        raw = await judge_model.generate(prompt, messages=messages, max_tokens=512, timeout=20.0)
 
         cross_scores_dict = {}
         # Judge gives itself a high score
@@ -394,6 +396,7 @@ class RouteMoAPipeline:
         layer_num: int,
         scorer_scores: dict[str, float],
         cross_scores: dict[str, float],
+        messages: Optional[list[dict]] = None,
     ) -> list[dict]:
         """Run intermediate layer: parallel generation using previous context."""
         tasks = []
@@ -406,6 +409,7 @@ class RouteMoAPipeline:
                     prev_results=prev_results,
                     scorer_score=scorer_scores.get(mid, 0.0),
                     cross_score=cross_scores.get(mid, 0.0),
+                    messages=messages,
                 )
             )
             tasks.append(t)
@@ -434,11 +438,12 @@ class RouteMoAPipeline:
         prev_results: list[dict],
         scorer_score: float,
         cross_score: float,
+        messages: Optional[list[dict]] = None,
     ) -> dict:
         """Generate and parse a Layer 2+ response."""
         prompt = build_intermediate_prompt(query, prev_results, len(prev_results)) # layer_num is not needed here
         # Strict timeout for intermediate layers
-        raw = await model.generate(prompt, system_prompt=LAYER_N_SYSTEM_PROMPT, timeout=40.0)
+        raw = await model.generate(prompt, system_prompt=LAYER_N_SYSTEM_PROMPT, messages=messages, timeout=40.0)
 
         if raw["error"]:
             self._log(f"  ❌ {model.name}: {raw['error']}")
@@ -476,7 +481,7 @@ class RouteMoAPipeline:
         }
 
     async def _run_final_aggregation(
-        self, query: str, all_answers: list[dict], aggregator_model_id: str
+        self, query: str, all_answers: list[dict], aggregator_model_id: str, messages: Optional[list[dict]] = None
     ) -> tuple[str, float, tuple[int, int]]:
         """
         Run the final aggregation step.
@@ -486,7 +491,7 @@ class RouteMoAPipeline:
         prompt = build_final_aggregation_prompt(query, all_answers)
 
         # Give aggregator more time and max tokens since it produces the final answer
-        raw = await model.generate(prompt, max_tokens=4096, timeout=60.0)
+        raw = await model.generate(prompt, messages=messages, max_tokens=4096, timeout=60.0)
 
         if raw["error"]:
             self._log(f"  ❌ Aggregation failed: {raw['error']}")

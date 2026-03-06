@@ -245,131 +245,131 @@ tab_pipeline, tab_analytics = st.tabs(["🚀 Pipeline", "📈 Analytics & Saving
 
 with tab_pipeline:
     # ─────────────────────────────────────────────
-    # Main Query Area
+    # Main Chat Area
     # ─────────────────────────────────────────────
-    if "query_input" not in st.session_state:
-        st.session_state["query_input"] = ""
+    
+    # Initialize chat history
+    if "messages" not in st.session_state:
+        st.session_state.messages = []
 
-    def clear_query():
-        st.session_state["query_input"] = ""
+    def clear_chat():
+        st.session_state.messages = []
 
-    query = st.text_area(
-        "💬 Enter your question",
-        placeholder="Ask anything... (e.g., 'Explain quantum computing in simple terms')",
-        height=100,
-        key="query_input",
-    )
+    col_clear, _ = st.columns([1, 5])
+    with col_clear:
+        st.button("🧹 Clear Chat", use_container_width=True, on_click=clear_chat)
 
-col_run, col_clear, _ = st.columns([1, 1, 4])
-with col_run:
-    run_button = st.button("🚀 Run Pipeline", type="primary", use_container_width=True)
-with col_clear:
-    clear_button = st.button("🧹 Clear", use_container_width=True, on_click=clear_query)
+    st.markdown("---")
 
-# ─────────────────────────────────────────────
-# Pipeline Execution
-# ─────────────────────────────────────────────
-if run_button and query.strip():
-    if not active_models:
-        st.error("⚠️ Please select at least one model!")
-    else:
-        # Log container
-        log_placeholder = st.empty()
-        logs = []
+    # Display chat messages from history on app rerun
+    for i, msg in enumerate(st.session_state.messages):
+        with st.chat_message(msg["role"]):
+            st.markdown(msg["content"])
+            # Display stats and trace if this is an assistant message
+            if msg["role"] == "assistant" and "stats" in msg:
+                stats = msg["stats"]
+                with st.expander("📊 Run Details & Trace", expanded=False):
+                    c1, c2, c3, c4 = st.columns(4)
+                    c1.metric("Total Cost", f"${stats['total_cost']:.6f}")
+                    c2.metric("Total Time", f"{stats['total_latency_ms']/1000:.2f}s")
+                    c3.metric("Layers", stats["num_layers"])
+                    c4.metric("Tokens", stats["total_tokens_in"] + stats["total_tokens_out"])
+                    
+                    st.markdown("**Layer Trace:**")
+                    for layer in msg.get("layer_trace", []):
+                        layer_label = f"Layer {layer['layer']}" if isinstance(layer["layer"], int) else "Final Aggregation"
+                        if "models" in layer:
+                            for m in layer["models"]:
+                                self_s = m.get("self_score", 0)
+                                mark = "✅" if self_s >= 0.8 else "⚠️" if self_s >= 0.5 else "❌"
+                                st.write(f"- {mark} **{m.get('model_name', m['model_id'])}**: Self Score: {self_s:.2f} | Latency: {m.get('latency_ms', 0):.0f}ms")
+                        elif "aggregator_model" in layer:
+                            st.write(f"- 🎯 **Aggregator ({layer['aggregator_model']})**")
 
-        def log_callback(msg: str):
-            # Strip ANSI color codes for Streamlit
-            import re
-            clean = re.sub(r"\033\[[0-9;]*m", "", msg)
-            logs.append(clean)
-            log_placeholder.markdown(
-                f'<div class="log-container">{"<br>".join(logs[-30:])}</div>',
-                unsafe_allow_html=True,
-            )
+    # Handle new user input
+    if prompt := st.chat_input("Ask anything... (e.g., 'Explain quantum computing in simple terms')"):
+        
+        if not active_models:
+            st.error("⚠️ Please select at least one model from the sidebar!")
+        else:
+            # Display user message
+            with st.chat_message("user"):
+                st.markdown(prompt)
+            
+            # Add user message to state
+            st.session_state.messages.append({"role": "user", "content": prompt})
+            
+            # Prepare sliding window context (last 6 messages = 3 turns)
+            context_messages = st.session_state.messages[:-1]
+            if len(context_messages) > 6:
+                context_messages = context_messages[-6:]
+                # ensure it starts with a user message
+                if context_messages[0]["role"] != "user":
+                    context_messages = context_messages[1:]
+            
+            # Remove purely internal fields like 'stats' when sending to OpenRouter API
+            api_context = [{"role": m["role"], "content": m["content"]} for m in context_messages]
 
-        # Create pipeline
-        pipeline = RouteMoAPipeline(
-            top_k=top_k,
-            max_layers=max_layers,
-            early_stop_threshold=threshold,
-            use_slm_scorer=use_slm,
-            active_model_ids=active_models,
-            log_callback=log_callback,
-        )
+            # Assistant response container
+            with st.chat_message("assistant"):
+                log_placeholder = st.empty()
+                logs = []
 
-        # Execute
-        with st.spinner("🔄 Pipeline running..."):
-            result = asyncio.run(pipeline.run(query.strip()))
+                def log_callback(msg_text: str):
+                    import re
+                    clean = re.sub(r"\033\[[0-9;]*m", "", msg_text)
+                    logs.append(clean)
+                    log_placeholder.markdown(
+                        f'<div class="log-container">{"<br>".join(logs[-15:])}</div>',
+                        unsafe_allow_html=True,
+                    )
 
-        # ── Display Results ──
-        st.markdown("---")
+                # Initialize Pipeline
+                pipeline = RouteMoAPipeline(
+                    top_k=top_k,
+                    max_layers=max_layers,
+                    early_stop_threshold=threshold,
+                    use_slm_scorer=use_slm,
+                    active_model_ids=active_models,
+                    log_callback=log_callback,
+                )
 
-        # Stats row
-        stats = result["stats"]
-        c1, c2, c3, c4 = st.columns(4)
-        with c1:
-            st.markdown(f"""
-            <div class="stat-card">
-                <div class="stat-value">${stats["total_cost"]:.6f}</div>
-                <div class="stat-label">💰 Total Cost</div>
-            </div>
-            """, unsafe_allow_html=True)
-        with c2:
-            st.markdown(f"""
-            <div class="stat-card">
-                <div class="stat-value">{stats["total_latency_ms"]/1000:.2f}s</div>
-                <div class="stat-label">⏱️ Total Time</div>
-            </div>
-            """, unsafe_allow_html=True)
-        with c3:
-            st.markdown(f"""
-            <div class="stat-card">
-                <div class="stat-value">{stats["num_layers"]}</div>
-                <div class="stat-label">📊 Layers</div>
-            </div>
-            """, unsafe_allow_html=True)
-        with c4:
-            st.markdown(f"""
-            <div class="stat-card">
-                <div class="stat-value">{stats["total_tokens_in"] + stats["total_tokens_out"]:,}</div>
-                <div class="stat-label">📝 Total Tokens</div>
-            </div>
-            """, unsafe_allow_html=True)
+                with st.spinner("🔄 RouteMoA is thinking..."):
+                    result = asyncio.run(pipeline.run(prompt, messages=api_context))
 
-        st.markdown("")
+                log_placeholder.empty() # clear logs
 
-        # Final answer
-        st.markdown("### 🎯 Final Answer")
-        st.markdown(
-            f'<div class="answer-box">{result["final_answer"]}</div>',
-            unsafe_allow_html=True,
-        )
+                # Final answer
+                final_answer = result["final_answer"]
+                st.markdown(final_answer)
 
-        # Layer trace
-        st.markdown("### 🔍 Layer Trace")
-        for layer in result["layer_trace"]:
-            layer_label = f"Layer {layer['layer']}" if isinstance(layer["layer"], int) else "Final Aggregation"
-            with st.expander(f"📦 {layer_label} — {layer['type']}", expanded=False):
-                if "models" in layer:
-                    for m in layer["models"]:
-                        cols = st.columns([3, 2, 2, 2])
-                        with cols[0]:
-                            st.markdown(f'<span class="model-tag">{m.get("model_name", m["model_id"])}</span>', unsafe_allow_html=True)
-                        with cols[1]:
-                            self_s = m.get("self_score", 0)
-                            color = "#22c55e" if self_s >= 0.8 else "#f59e0b" if self_s >= 0.5 else "#ef4444"
-                            st.markdown(f"Self: **{self_s:.2f}**")
-                        with cols[2]:
-                            if "cross_score" in m:
-                                st.markdown(f"Cross: **{m['cross_score']:.2f}**")
-                        with cols[3]:
-                            st.markdown(f"${m.get('cost', 0):.6f} | {m.get('latency_ms', 0):.0f}ms")
-                elif "aggregator_model" in layer:
-                    st.markdown(f"Aggregator: **{layer['aggregator_model']}**")
-                    st.markdown(f"Cost: ${layer.get('cost', 0):.6f}")
-
-elif run_button:
-    st.warning("⚠️ Please enter a question!")
+                # Stats Expander
+                stats = result["stats"]
+                with st.expander("📊 Run Details & Trace", expanded=False):
+                    c1, c2, c3, c4 = st.columns(4)
+                    c1.metric("Total Cost", f"${stats['total_cost']:.6f}")
+                    c2.metric("Total Time", f"{stats['total_latency_ms']/1000:.2f}s")
+                    c3.metric("Layers", stats["num_layers"])
+                    c4.metric("Tokens", stats["total_tokens_in"] + stats["total_tokens_out"])
+                    
+                    st.markdown("**Layer Trace:**")
+                    for layer in result["layer_trace"]:
+                        layer_label = f"Layer {layer['layer']}" if isinstance(layer["layer"], int) else "Final Aggregation"
+                        if "models" in layer:
+                            for m in layer["models"]:
+                                self_s = m.get("self_score", 0)
+                                mark = "✅" if self_s >= 0.8 else "⚠️" if self_s >= 0.5 else "❌"
+                                st.write(f"- {mark} **{m.get('model_name', m['model_id'])}**: Self: {self_s:.2f} | Cross: {m.get('cross_score', 0):.2f} | Latency: {m.get('latency_ms', 0):.0f}ms")
+                        elif "aggregator_model" in layer:
+                            st.write(f"- 🎯 **Aggregator ({layer['aggregator_model']})**")
+            
+            # Save assistant message internally
+            st.session_state.messages.append({
+                "role": "assistant",
+                "content": final_answer,
+                "stats": stats,
+                "layer_trace": result["layer_trace"]
+            })
 
 # ─────────────────────────────────────────────
 # Analytics Tab
