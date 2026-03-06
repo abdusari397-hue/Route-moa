@@ -195,6 +195,27 @@ st.markdown("""
 # Sidebar Controls
 # ─────────────────────────────────────────────
 with st.sidebar:
+    st.markdown("### 🔑 API Authentication")
+    
+    # Try to get from env first, else ask user
+    env_key = os.getenv("OPENROUTER_API_KEY", "")
+    
+    api_key = st.text_input(
+        "OpenRouter API Key",
+        value=st.session_state.get("api_key", env_key),
+        type="password",
+        placeholder="sk-or-v1-...",
+        help="Get your free key at https://openrouter.ai/"
+    )
+    
+    if api_key:
+        st.session_state["api_key"] = api_key
+        # Temporarily set it in environment so config/pipeline can access it
+        os.environ["OPENROUTER_API_KEY"] = api_key
+    else:
+        st.warning("⚠️ API Key required to run the pipeline.")
+
+    st.markdown("---")
     st.markdown("### ⚙️ Pipeline Settings")
 
     top_k = st.slider("Top-K Models per Layer", 1, len(MODELS), TOP_K)

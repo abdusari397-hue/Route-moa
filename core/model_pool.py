@@ -63,8 +63,11 @@ class OpenRouterModel:
             messages.append({"role": "system", "content": system_prompt})
         messages.append({"role": "user", "content": prompt})
 
+        # Dynamically fetch API key to support runtime UI input
+        current_api_key = os.getenv("OPENROUTER_API_KEY", OPENROUTER_API_KEY)
+
         headers = {
-            "Authorization": f"Bearer {OPENROUTER_API_KEY}",
+            "Authorization": f"Bearer {current_api_key}",
             "Content-Type": "application/json",
             "HTTP-Referer": "https://routemoa.local",
             "X-Title": "RouteMoA",
