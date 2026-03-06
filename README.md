@@ -99,5 +99,10 @@ On difficult reasoning, coding, and logical science questions, RouteMoA demonstr
 ## 🤝 Contributing
 Contributions, issues, and feature requests are welcome! 
 
+## 📚 Acknowledgements & Citation
+This project is an **unofficial, open-source implementation** inspired by and based on the concepts presented in the research paper:
+> **RouteMoA: Dynamic Routing without Pre-Inference Boosts Efficient Mixture-of-Agents** (Jan 2026).
+All credit for the original theoretical architecture, SLM prediction concepts, and mixture-of-judges routing methodology belongs to the original authors of the paper.
+
 ## 📝 License
 This project is licensed under the MIT License.
